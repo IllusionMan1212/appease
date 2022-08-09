@@ -1,11 +1,12 @@
+import 'dart:convert' as convert;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_svg_provider/flutter_svg_provider.dart';
 import 'package:http/http.dart' as http;
+import 'package:rxdart/subjects.dart';
 import 'package:workmanager/workmanager.dart';
-import 'dart:convert' as convert;
 
 import 'cheese.dart';
 
@@ -16,22 +17,13 @@ const AndroidInitializationSettings androidInitializationSettings =
 InitializationSettings initializationSettings =
     const InitializationSettings(android: androidInitializationSettings);
 
+final BehaviorSubject<String?> selectNotificationSubject =
+    BehaviorSubject<String?>();
+
+String? selectedNotificationPayload;
+
 enum Tasks {
   dailyCheese,
-}
-
-void selectNotification(String? payload) async {
-  if (payload != null) {
-    final cheese =
-        Cheese.fromJson(convert.jsonDecode(payload) as Map<String, dynamic>);
-    print(cheese.name);
-  }
-
-  // TODO: navigate to cheese page
-  // await Navigator.push(
-  //     context,
-  //     MaterialPageRoute<void>(builder: (context) => SecondScreen(payload)),
-  // );
 }
 
 Future<Uint8List> _getByteArrayFromUrl(String url) async {
@@ -41,6 +33,8 @@ Future<Uint8List> _getByteArrayFromUrl(String url) async {
 
 sendDailyCheeseNotification(Map<String, dynamic> cheeseJson) async {
   final cheese = Cheese.fromJson(cheeseJson);
+
+  print(cheeseJson);
 
   final cheeseImage =
       ByteArrayAndroidBitmap(await _getByteArrayFromUrl(cheese.imageURL));
@@ -68,7 +62,7 @@ sendDailyCheeseNotification(Map<String, dynamic> cheeseJson) async {
       payload: convert.jsonEncode(cheeseJson));
 }
 
-Future<bool> getDailyCheese() async {
+Future<bool> fetchDailyCheese() async {
   final Uri baseUrl = Uri.https('api.illusionman1212.tech', '/cheese/today');
   var res = await http.get(baseUrl);
   if (res.statusCode == 200) {
@@ -84,7 +78,7 @@ Future<bool> getDailyCheese() async {
 void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     if (task == Tasks.dailyCheese.name) {
-      return Future.value(await getDailyCheese());
+      return Future.value(await fetchDailyCheese());
     }
 
     return Future.error(Exception("Unhandled Task: $task"));
@@ -99,26 +93,35 @@ Future<void> main() async {
     isInDebugMode: true,
   );
 
-  final now = DateTime.now().toUtc();
-  Duration timeTill3AMUTC = const Duration();
+  Workmanager().cancelByUniqueName(Tasks.dailyCheese.name);
 
-  if (now.hour < 3) {
-    timeTill3AMUTC =
-        now.difference(DateTime(now.year, now.month, now.day, 3, 0, 0)).abs();
-  } else if (now.hour >= 3) {
+  final now = DateTime.now().toUtc();
+  Duration timeTill12PMUTC = const Duration();
+
+  if (now.hour < 12) {
+    timeTill12PMUTC = now
+        .difference(DateTime.utc(now.year, now.month, now.day, 12, 0, 0))
+        .abs();
+  } else if (now.hour >= 12) {
     final nextDay = now.add(const Duration(days: 1));
-    timeTill3AMUTC = now
-        .difference(DateTime(nextDay.year, nextDay.month, nextDay.day, 3, 0, 0))
+    timeTill12PMUTC = now
+        .difference(
+            DateTime.utc(nextDay.year, nextDay.month, nextDay.day, 12, 0, 0))
         .abs();
   }
+
+  print("TTL: ${timeTill12PMUTC.inSeconds}");
 
   Workmanager().registerPeriodicTask(
       Tasks.dailyCheese.name, Tasks.dailyCheese.name,
       frequency: const Duration(hours: 24),
-      initialDelay: Duration(seconds: timeTill3AMUTC.inSeconds));
+      initialDelay: Duration(seconds: timeTill12PMUTC.inSeconds));
 
   await flutterLocalNotificationsPlugin.initialize(initializationSettings,
-      onSelectNotification: selectNotification);
+      onSelectNotification: (String? payload) async {
+    selectedNotificationPayload = payload;
+    selectNotificationSubject.add(payload);
+  });
 
   runApp(const Appease());
 }
@@ -148,12 +151,91 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  showAllCheeses() {
+  bool fetchingRandom = false;
+  bool fetchingDaily = false;
+
+  Future<void> getAllCheeses() async {
     // TODO: get all cheeses
   }
 
-  getRandomCheese() {
-    // TODO: get random cheese
+  Future<void> getDailyCheese() async {
+    setState(() {
+      fetchingDaily = true;
+    });
+
+    final Uri baseUrl = Uri.https('api.illusionman1212.tech', '/cheese/today');
+    var res = await http.get(baseUrl);
+    if (res.statusCode == 200) {
+      final jsonRes = convert.jsonDecode(res.body) as Map<String, dynamic>;
+      Cheese cheese = Cheese.fromJson(jsonRes['cheese']);
+
+      setState(() {
+        fetchingDaily = false;
+      });
+
+      if (!mounted) return;
+
+      Navigator.push(context,
+          MaterialPageRoute<void>(builder: (context) => CheeseDetails(cheese)));
+    } else {
+      print('error while getting daily cheese');
+      setState(() {
+        fetchingDaily = false;
+      });
+    }
+  }
+
+  Future<void> getRandomCheese() async {
+    setState(() {
+      fetchingRandom = true;
+    });
+
+    Uri uri = Uri.https('api.illusionman1212.tech', '/cheese/random');
+    var res = await http.get(uri);
+    if (res.statusCode == 200) {
+      final jsonRes = convert.jsonDecode(res.body) as Map<String, dynamic>;
+      Cheese cheese = Cheese.fromJson(jsonRes['cheese']);
+
+      setState(() {
+        fetchingRandom = false;
+      });
+
+      if (!mounted) return;
+
+      Navigator.push(context,
+          MaterialPageRoute<void>(builder: (context) => CheeseDetails(cheese)));
+    } else {
+      print('error while getting random cheese');
+      setState(() {
+        fetchingRandom = false;
+      });
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _configureSelectNotificationSubject();
+  }
+
+  void _configureSelectNotificationSubject() {
+    selectNotificationSubject.stream.listen((String? payload) async {
+      if (payload != null) {
+        final cheese = Cheese.fromJson(
+            convert.jsonDecode(payload) as Map<String, dynamic>);
+
+        await Navigator.push(
+          context,
+          MaterialPageRoute<void>(builder: (context) => CheeseDetails(cheese)),
+        );
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    selectNotificationSubject.close();
+    super.dispose();
   }
 
   @override
@@ -187,11 +269,50 @@ class _HomePageState extends State<HomePage> {
                     alignment: WrapAlignment.center,
                     children: <Widget>[
                       ElevatedButton(
-                          child: const Text("Random cheese"),
-                          onPressed: () => getRandomCheese()),
+                          onPressed: fetchingDaily
+                              ? null
+                              : () async => await getDailyCheese(),
+                          child: RichText(
+                              text: TextSpan(
+                            text: 'Daily cheese',
+                            children: [
+                              if (fetchingDaily)
+                                const WidgetSpan(
+                                    child: Padding(
+                                  padding: EdgeInsets.only(left: 12),
+                                  child: SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                          color: Colors.black, strokeWidth: 3)),
+                                ))
+                            ],
+                            style: const TextStyle(color: Colors.black),
+                          ))),
                       ElevatedButton(
-                          child: const Text("All cheeses"),
-                          onPressed: () => showAllCheeses()),
+                          onPressed: fetchingRandom
+                              ? null
+                              : () async => await getRandomCheese(),
+                          child: RichText(
+                              text: TextSpan(
+                            text: 'Random cheese',
+                            children: [
+                              if (fetchingRandom)
+                                const WidgetSpan(
+                                    child: Padding(
+                                  padding: EdgeInsets.only(left: 12),
+                                  child: SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                          color: Colors.black, strokeWidth: 3)),
+                                ))
+                            ],
+                            style: const TextStyle(color: Colors.black),
+                          ))),
+                      ElevatedButton(
+                          onPressed: () => getAllCheeses(),
+                          child: const Text("All cheeses")),
                     ],
                   ),
                 ),
