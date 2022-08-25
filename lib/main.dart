@@ -6,7 +6,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_svg_provider/flutter_svg_provider.dart';
 import 'package:http/http.dart' as http;
 import 'package:rxdart/subjects.dart';
-import 'package:workmanager/workmanager.dart';
+import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 
 import 'cheese.dart';
 
@@ -19,8 +19,6 @@ InitializationSettings initializationSettings =
 
 final BehaviorSubject<String?> selectNotificationSubject =
     BehaviorSubject<String?>();
-
-String? selectedNotificationPayload;
 
 enum Tasks {
   dailyCheese,
@@ -62,72 +60,67 @@ sendDailyCheeseNotification(Map<String, dynamic> cheeseJson) async {
       payload: convert.jsonEncode(cheeseJson));
 }
 
-Future<bool> fetchDailyCheese() async {
+Future<void> fetchDailyCheese() async {
   final Uri baseUrl = Uri.https('api.illusionman1212.tech', '/cheese/today');
   var res = await http.get(baseUrl);
   if (res.statusCode == 200) {
     final jsonRes = convert.jsonDecode(res.body) as Map<String, dynamic>;
 
     await sendDailyCheeseNotification(jsonRes['cheese']);
-    return true;
   } else {
-    return false;
+    print("error while fetching daily cheese");
   }
-}
-
-void callbackDispatcher() {
-  Workmanager().executeTask((task, inputData) async {
-    if (task == Tasks.dailyCheese.name) {
-      return Future.value(await fetchDailyCheese());
-    }
-
-    return Future.error(Exception("Unhandled Task: $task"));
-  });
 }
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  Workmanager().initialize(
-    callbackDispatcher,
-    isInDebugMode: true,
-  );
-
-  Workmanager().cancelByUniqueName(Tasks.dailyCheese.name);
-
-  final now = DateTime.now().toUtc();
-  Duration timeTill12PMUTC = const Duration();
-
-  if (now.hour < 12) {
-    timeTill12PMUTC = now
-        .difference(DateTime.utc(now.year, now.month, now.day, 12, 0, 0))
-        .abs();
-  } else if (now.hour >= 12) {
-    final nextDay = now.add(const Duration(days: 1));
-    timeTill12PMUTC = now
-        .difference(
-            DateTime.utc(nextDay.year, nextDay.month, nextDay.day, 12, 0, 0))
-        .abs();
-  }
-
-  print("TTL: ${timeTill12PMUTC.inSeconds}");
-
-  Workmanager().registerPeriodicTask(
-      Tasks.dailyCheese.name, Tasks.dailyCheese.name,
-      frequency: const Duration(hours: 24),
-      initialDelay: Duration(seconds: timeTill12PMUTC.inSeconds));
+  await AndroidAlarmManager.initialize();
 
   await flutterLocalNotificationsPlugin.initialize(initializationSettings,
       onSelectNotification: (String? payload) async {
-    selectedNotificationPayload = payload;
     selectNotificationSubject.add(payload);
   });
 
-  runApp(const Appease());
+  final now = DateTime.now().toUtc();
+  Duration timeTill2PMUTC = const Duration();
+
+  if (now.hour < 14) {
+    timeTill2PMUTC = now
+        .difference(DateTime.utc(now.year, now.month, now.day, 14, 0, 0))
+        .abs();
+  } else if (now.hour >= 14) {
+    final nextDay = now.add(const Duration(days: 1));
+    timeTill2PMUTC = now
+        .difference(
+            DateTime.utc(nextDay.year, nextDay.month, nextDay.day, 14, 0, 0))
+        .abs();
+  }
+
+  final NotificationAppLaunchDetails? notificationAppLaunchDetails =
+      await flutterLocalNotificationsPlugin.getNotificationAppLaunchDetails();
+
+  final notifLaunch =
+      notificationAppLaunchDetails?.didNotificationLaunchApp ?? false;
+  final payload = notificationAppLaunchDetails?.payload;
+
+  await AndroidAlarmManager.periodic(
+    const Duration(hours: 24), Tasks.dailyCheese.index, fetchDailyCheese,
+    allowWhileIdle: true, rescheduleOnReboot: true, exact: true, wakeup: true,
+    startAt: DateTime.now().toUtc().add(Duration(seconds: timeTill2PMUTC.inSeconds)),
+  );
+
+  runApp(Appease(
+      initialRoute: notifLaunch ? CheeseDetails.routeName : '/',
+      notifPayload: payload));
 }
 
 class Appease extends StatelessWidget {
-  const Appease({Key? key}) : super(key: key);
+  final String initialRoute;
+  final String? notifPayload;
+
+  const Appease({Key? key, required this.initialRoute, this.notifPayload})
+      : super(key: key);
 
   @override
   Widget build(BuildContext context) {
@@ -136,7 +129,41 @@ class Appease extends StatelessWidget {
       theme: ThemeData(
         primarySwatch: Colors.yellow,
       ),
-      home: const HomePage(title: 'Appease: Daily Cheese'),
+      onGenerateRoute: (settings) {
+        switch (settings.name) {
+          case '/':
+            return PageRouteBuilder(
+              pageBuilder: (_, __, ___) =>
+                  const HomePage(title: 'Appease: Daily Cheese'),
+              transitionsBuilder: (c, anim, a2, child) =>
+                  FadeTransition(opacity: anim, child: child),
+            );
+          case CheeseDetails.routeName:
+            if (initialRoute == CheeseDetails.routeName) {
+              return PageRouteBuilder(
+                  pageBuilder: (_, __, ___) => const CheeseDetails(),
+                  settings: RouteSettings(
+                      arguments: CheeseDetailsArgs(
+                          Cheese.fromJson(convert.jsonDecode(notifPayload!),
+                          ),
+                      ),
+                  ),
+                  transitionsBuilder: (_, anim, __, child) =>
+                      FadeTransition(opacity: anim, child: child),
+              );
+            }
+
+            return PageRouteBuilder(
+              pageBuilder: (_, __, ___) => const CheeseDetails(),
+              settings: RouteSettings(arguments: settings.arguments),
+              transitionsBuilder: (_, anim, __, child) =>
+                  FadeTransition(opacity: anim, child: child),
+            );
+          default:
+            return null;
+        }
+      },
+      initialRoute: initialRoute,
     );
   }
 }
@@ -175,8 +202,8 @@ class _HomePageState extends State<HomePage> {
 
       if (!mounted) return;
 
-      Navigator.push(context,
-          MaterialPageRoute<void>(builder: (context) => CheeseDetails(cheese)));
+      await Navigator.pushNamed(context, CheeseDetails.routeName,
+          arguments: CheeseDetailsArgs(cheese));
     } else {
       print('error while getting daily cheese');
       setState(() {
@@ -202,8 +229,8 @@ class _HomePageState extends State<HomePage> {
 
       if (!mounted) return;
 
-      Navigator.push(context,
-          MaterialPageRoute<void>(builder: (context) => CheeseDetails(cheese)));
+      await Navigator.pushNamed(context, CheeseDetails.routeName,
+          arguments: CheeseDetailsArgs(cheese));
     } else {
       print('error while getting random cheese');
       setState(() {
@@ -224,10 +251,8 @@ class _HomePageState extends State<HomePage> {
         final cheese = Cheese.fromJson(
             convert.jsonDecode(payload) as Map<String, dynamic>);
 
-        await Navigator.push(
-          context,
-          MaterialPageRoute<void>(builder: (context) => CheeseDetails(cheese)),
-        );
+        await Navigator.pushNamed(context, CheeseDetails.routeName,
+            arguments: CheeseDetailsArgs(cheese));
       }
     });
   }

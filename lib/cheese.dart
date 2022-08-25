@@ -118,12 +118,22 @@ class Cheese {
   }
 }
 
-class CheeseDetails extends StatelessWidget {
+class CheeseDetailsArgs {
   final Cheese cheese;
-  const CheeseDetails(this.cheese, {Key? key}) : super(key: key);
+
+  CheeseDetailsArgs(this.cheese);
+}
+
+class CheeseDetails extends StatelessWidget {
+  const CheeseDetails({Key? key}) : super(key: key);
+  static const routeName = '/cheese';
 
   @override
   Widget build(BuildContext context) {
+    final args =
+        ModalRoute.of(context)!.settings.arguments as CheeseDetailsArgs;
+    final cheese = args.cheese;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(cheese.name),
