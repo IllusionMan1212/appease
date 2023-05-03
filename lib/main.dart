@@ -61,7 +61,7 @@ sendDailyCheeseNotification(Map<String, dynamic> cheeseJson) async {
 }
 
 Future<void> fetchDailyCheese() async {
-  final Uri baseUrl = Uri.https('api.illusionman1212.tech', '/cheese/today');
+  final Uri baseUrl = Uri.https('api.illusionman1212.com', '/cheese/today');
   var res = await http.get(baseUrl);
   if (res.statusCode == 200) {
     final jsonRes = convert.jsonDecode(res.body) as Map<String, dynamic>;
@@ -78,8 +78,8 @@ Future<void> main() async {
   await AndroidAlarmManager.initialize();
 
   await flutterLocalNotificationsPlugin.initialize(initializationSettings,
-      onSelectNotification: (String? payload) async {
-    selectNotificationSubject.add(payload);
+      onDidReceiveNotificationResponse: (NotificationResponse? response) async {
+    selectNotificationSubject.add(response?.payload);
   });
 
   final now = DateTime.now().toUtc();
@@ -102,7 +102,7 @@ Future<void> main() async {
 
   final notifLaunch =
       notificationAppLaunchDetails?.didNotificationLaunchApp ?? false;
-  final payload = notificationAppLaunchDetails?.payload;
+  final notifResponse = notificationAppLaunchDetails?.notificationResponse;
 
   await AndroidAlarmManager.periodic(
     const Duration(hours: 24), Tasks.dailyCheese.index, fetchDailyCheese,
@@ -112,7 +112,7 @@ Future<void> main() async {
 
   runApp(Appease(
       initialRoute: notifLaunch ? CheeseDetails.routeName : '/',
-      notifPayload: payload));
+      notifPayload: notifResponse?.payload));
 }
 
 class Appease extends StatelessWidget {
@@ -190,7 +190,7 @@ class _HomePageState extends State<HomePage> {
       fetchingDaily = true;
     });
 
-    final Uri baseUrl = Uri.https('api.illusionman1212.tech', '/cheese/today');
+    final Uri baseUrl = Uri.https('api.illusionman1212.com', '/cheese/today');
     var res = await http.get(baseUrl);
     if (res.statusCode == 200) {
       final jsonRes = convert.jsonDecode(res.body) as Map<String, dynamic>;
@@ -217,7 +217,7 @@ class _HomePageState extends State<HomePage> {
       fetchingRandom = true;
     });
 
-    Uri uri = Uri.https('api.illusionman1212.tech', '/cheese/random');
+    Uri uri = Uri.https('api.illusionman1212.com', '/cheese/random');
     var res = await http.get(uri);
     if (res.statusCode == 200) {
       final jsonRes = convert.jsonDecode(res.body) as Map<String, dynamic>;
